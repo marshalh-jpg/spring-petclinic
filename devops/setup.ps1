@@ -599,7 +599,7 @@ if (-not (Test-Path (Join-Path $KeysDir "id_rsa"))) {
     $ka = @(
         'run', '--rm', '-v', "${KeysDir}:/keys", 'alpine:latest',
         'sh', '-c',
-        'apk add --no-cache openssh-keygen >/dev/null 2>&1 && ssh-keygen -q -t rsa -b 4096 -N "" -f /keys/id_rsa'
+        "apk add --no-cache openssh-keygen >/dev/null 2>&1 && ssh-keygen -q -t rsa -b 4096 -N '' -f /keys/id_rsa"
     )
     & docker @ka
     Assert-LastExit "generate SSH keypair inside an alpine container"
@@ -620,8 +620,8 @@ try {
 } catch {}
 
 if (-not $vmState) {
-    Write-Info "Launching Ubuntu LTS VM 'prod-server' (2 vCPU / 2 GB RAM / 8 GB disk)..."
-    multipass launch --name prod-server --cpus 2 --memory 2G --disk 8G
+    Write-Info "Launching Ubuntu LTS VM 'prod-server' (1 vCPU / 2 GB RAM / 8 GB disk, bridged to Ethernet)..."
+    multipass launch --name prod-server --cpus 1 --memory 2G --disk 8G --network name=Ethernet
     Assert-LastExit "multipass launch prod-server"
 } else {
     if ($vmState -eq "Deleted") { Invoke-Quiet "multipass recover prod-server" | Out-Null }
@@ -630,7 +630,13 @@ if (-not $vmState) {
 }
 
 $infoJson = multipass info prod-server --format json | ConvertFrom-Json
-$VmIp = $infoJson.info.'prod-server'.ipv4[0]
+$VmIp = ($infoJson.info.'prod-server'.ipv4 | Where-Object { $_ -and $_ -ne "N/A" -and $_ -notmatch '^10\.0\.2\.' } | Select-Object -First 1)
+if (-not $VmIp) {
+    $hostnameOutput = multipass exec prod-server -- hostname -I 2>$null
+    if ($hostnameOutput) {
+        $VmIp = ($hostnameOutput -split '\s+' | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^10\.0\.2\.' } | Select-Object -First 1)
+    }
+}
 if (-not $VmIp) {
     throw "Could not determine the VM's IP address. Try 'multipass start prod-server' then 'multipass info prod-server', and re-run this script."
 }
