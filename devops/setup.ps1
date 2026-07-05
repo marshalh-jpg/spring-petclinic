@@ -432,7 +432,7 @@ pipeline {
                 sh '''
                     echo "Verifying production (host.docker.internal:8888 -> VM:8080)..."
                     for i in $(seq 1 36); do
-                        if curl -sf -o /dev/null http://host.docker.internal:8888; then
+                        if curl -4 -sf -o /dev/null http://host.docker.internal:8888; then
                             echo "PRODUCTION DEPLOYMENT VERIFIED"
                             exit 0
                         fi
@@ -471,7 +471,7 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 
 $ansibleInventory = @'
 [prod]
-prod-server ansible_host=host.docker.internal ansible_port=2222 ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+prod-server ansible_host=host.docker.internal ansible_port=2222 ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansible_ssh_common_args='-4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 '@
 
 $ansiblePlaybook = @'

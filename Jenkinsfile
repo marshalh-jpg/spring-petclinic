@@ -87,7 +87,7 @@ pipeline {
                 sh '''
                     echo "Verifying production (host.docker.internal:8888 -> VM:8080)..."
                     for i in $(seq 1 36); do
-                        if curl -sf -o /dev/null http://host.docker.internal:8888; then
+                        if curl -4 -sf -o /dev/null http://host.docker.internal:8888; then
                             echo "PRODUCTION DEPLOYMENT VERIFIED"
                             exit 0
                         fi
