@@ -1,0 +1,51 @@
+---
+- name: Deploy Spring PetClinic to the production VM
+  hosts: prod
+  become: true
+  vars:
+    app_jar: ""   # passed by Jenkins with -e app_jar=/path/to/jar
+
+  tasks:
+    - name: Install Java runtime
+      apt:
+        name: openjdk-21-jre-headless
+        state: present
+        update_cache: yes
+
+    - name: Create application directory
+      file:
+        path: /opt/petclinic
+        state: directory
+        mode: '0755'
+
+    - name: Copy application jar
+      copy:
+        src: "{{ app_jar }}"
+        dest: /opt/petclinic/petclinic.jar
+        mode: '0644'
+
+    - name: Install systemd service
+      copy:
+        dest: /etc/systemd/system/petclinic.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Spring PetClinic
+          After=network.target
+
+          [Service]
+          User=ubuntu
+          ExecStart=/usr/bin/java -jar /opt/petclinic/petclinic.jar
+          SuccessExitStatus=143
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Restart and enable the service
+      systemd:
+        name: petclinic
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
