@@ -55,6 +55,23 @@ published in Jenkins) → Ansible Deploy to VM → Production Smoke Test.
 
 - **Windows 11 Pro/Enterprise** (Hyper-V available).
   *Windows 11 Home:* install VirtualBox, then run `multipass set local.driver=virtualbox` once after installing Multipass.
+  This path needs three extra one-time host fixes, all explained in section 10 —
+  `setup.ps1` itself already launches the VM with 1 vCPU and bridged networking
+  to account for the first two:
+  - Enable the **Windows Hypervisor Platform** optional feature (`Enable-WindowsOptionalFeature
+    -Online -FeatureName HypervisorPlatform -All`) and reboot. Without it, VirtualBox's UEFI
+    boot can deadlock outright when Docker Desktop's WSL2 backend is also using the hypervisor.
+  - VirtualBox 7.2.x has a known race condition that hangs UEFI boot when a VM has 2+ vCPUs
+    ([forum report](https://forums.virtualbox.org/viewtopic.php?t=114397)) — `setup.ps1` launches
+    with `--cpus 1` to avoid it.
+  - VirtualBox's default NAT networking is **not host-routable**, which breaks both `multipass
+    info`'s IP reporting and the `netsh portproxy` bridges in STEP 7. `setup.ps1` launches with
+    `--network name=Ethernet` (bridged to the host's physical adapter) instead — if your machine
+    is on Wi-Fi rather than wired Ethernet, change that to `--network name=Wi-Fi` (run `multipass
+    networks` to see the exact adapter names available).
+  - Windows' **IP Helper service** (`iphlpsvc`) must be *running* for `netsh portproxy` rules to
+    actually forward traffic — it's often `Manual` startup and not started by default. Run
+    `Start-Service iphlpsvc; Set-Service iphlpsvc -StartupType Automatic` once so it survives reboots.
 - **≥ 16 GB RAM** recommended (SonarQube + Jenkins + Maven builds + a 2 GB VM). Docker Desktop's WSL2 default (50 % of host RAM) is fine.
 - **~15 GB free disk** for images, volumes and the VM.
 - Tools (install via winget, then **start Docker Desktop** and wait for the whale to settle):
@@ -237,6 +254,12 @@ reused. **After a host reboot the VM may receive a new IP — simply re-run
 | First build fails at the Ansible stage | Verify the SSH path: `docker exec jenkins ssh -i /root/.ssh/id_rsa -p 2222 -o StrictHostKeyChecking=no ubuntu@host.docker.internal hostname` should print `prod-server`. If the VM IP changed (reboot), re-run `setup.ps1`, then *Rebuild* in Jenkins. |
 | Multipass on Windows 11 Home | Install VirtualBox, then `multipass set local.driver=virtualbox`. |
 | Future **Java** code changes fail the build with formatting violations | PetClinic enforces `spring-javaformat` on `.java` sources. Run `./mvnw spring-javaformat:apply` before committing Java edits. (The demo script edits a resources file precisely to avoid this.) |
+| `multipass launch` times out / VM shows `Running` with `IPv4: N/A` forever, VBoxHeadless pegs a CPU core | VirtualBox 7.2.x deadlocking on UEFI boot — see the two VirtualBox-driver bullets in section 2 (Windows Hypervisor Platform + 1 vCPU). Kill the stuck VM first: `multipass delete prod-server; multipass purge`, then re-run `setup.ps1`. |
+| VM has an IP but `netsh portproxy` still can't reach it (`localhost:2222`/`:8888` refuse or time out even from the host itself) | The **IP Helper service** isn't running — `netsh portproxy` rules are inert without it. `Start-Service iphlpsvc; Set-Service iphlpsvc -StartupType Automatic`. |
+| Maven build fails instantly at `validate` with `NoHttp: http:// URLs are not allowed` | PetClinic's `nohttp-checkstyle` rule scans the **entire repo**, including `devops/`, `Jenkinsfile` and `ansible/`, which legitimately reference `http://localhost`/`http://host.docker.internal`. Exclude them in `pom.xml`'s `nohttp-checkstyle-validation` execution: add `**/devops/**/*,**/Jenkinsfile,**/ansible/**/*` to the plugin's `<excludes>`. |
+| Ansible/Ansible-deploy stage fails with `ssh: connect to host host.docker.internal port 2222: Network is unreachable` (or `Connection refused` even though SSH works fine) | `host.docker.internal` resolves to **both** an IPv6 and IPv4 address inside the Jenkins container, but the `netsh portproxy` bridges are IPv4-only. Force IPv4: add `-4` to `ansible_ssh_common_args` in `ansible/inventory.ini` and to the `curl` call in the Jenkinsfile's Production Smoke Test stage. If it's `Connection refused` rather than `unreachable`, that's the IP Helper issue above, not this one. |
+| First pipeline build never starts even though the job exists (`lastBuild` 404s, queue is empty) | Jenkins reloads a **persisted** build queue from `JENKINS_HOME` on container start, which can race with and discard the Job DSL's boot-time `queue()` call (`Loading queue will discard previously scheduled items` in `docker logs jenkins`). This mainly bites re-runs where the Jenkins volume already existed. Trigger it manually: get a CSRF crumb and POST to build, e.g. `curl -c cj.txt -u admin:admin http://localhost:8080/crumbIssuer/api/json` then `curl -b cj.txt -u admin:admin -H "Jenkins-Crumb: <crumb>" -X POST http://localhost:8080/job/petclinic-devsecops/build` (or just click *Build Now* in the UI). |
+| First production deploy's smoke test times out even though Ansible succeeded | The VM only has 1 vCPU (see section 2), so Spring Boot's first cold start (Hibernate/JPA init) can take longer than the smoke test's 180 s budget. Check `multipass exec prod-server -- journalctl -u petclinic -f` — if it's still initializing, just re-run the build once the app has finished starting; subsequent starts are faster. |
 | Grafana plugin-metric panels empty right after setup | Metrics appear after the first builds complete; the `up{job="jenkins"}` panel is populated immediately. |
 
 ## 11. Teardown
